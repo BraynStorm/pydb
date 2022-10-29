@@ -1,0 +1,5 @@
+[build-system]
+
+[tool.black]
+[tool.mypy]
+[tool.venv]
