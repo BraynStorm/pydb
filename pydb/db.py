@@ -3,7 +3,18 @@ import pickle
 from collections import defaultdict
 from enum import IntEnum
 from pathlib import Path
-from typing import Any, Dict, Hashable, Iterable, List, NewType, Set, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Hashable,
+    Iterable,
+    List,
+    NewType,
+    Set,
+    Tuple,
+    cast,
+)
 
 from typing_extensions import Protocol
 
@@ -11,8 +22,13 @@ Field = NewType("Field", Dict[Hashable, Any])
 FieldRow = NewType("FieldRow", object)
 
 
-class VarargsPredicate(Protocol):
+class VarargsAnyPredicate(Protocol):
     def __call__(self, *args: Any) -> bool:
+        ...
+
+
+class VarargsListsPredicate(Protocol):
+    def __call__(self, *args: List[Any]) -> bool:
         ...
 
 
@@ -57,10 +73,61 @@ class PyDB:
         with field_path.open("wb") as field_file:
             pickle.dump(data, field_file)
 
+    def find_keys_group_by(
+        self,
+        fields: Tuple[str, ...],
+        group_by_field: str,
+        predicate: VarargsListsPredicate,
+        mode: FindMode = FindMode.INNER_JOIN,
+    ) -> Dict[Hashable, List[Hashable]]:
+        group_field: Dict[Hashable, Any]
+        field_keys: Set[Hashable]
+        call_params: List[List[Hashable]]
+        result: Dict[Hashable, List[Hashable]]
+        grouped: Dict[Hashable, List[Hashable]]
+        field_map: Dict[str, Dict[Hashable, Any]]
+
+        field_map = dict()
+        for field_name in fields:
+            field_map[field_name] = self.load_field(field_name)
+
+        if group_by_field in field_map:
+            group_field = field_map[group_by_field]
+        else:
+            group_field = self.load_field(group_by_field)
+
+        # Determine keys to use.
+        if mode == FindMode.INNER_JOIN:
+            field_keys = set(next(iter(field_map.values())).keys())
+            for field in field_map.values():
+                field_keys.intersection_update(field.keys())
+        elif mode == FindMode.OUTER_JOIN:
+            field_keys = set()
+            for field in field_map.values():
+                field_keys.update(field.keys())
+
+        grouped = defaultdict(list)
+        for key in field_keys:
+            group_key = cast(Hashable, group_field[key])
+            grouped[group_key].append(key)
+
+        result = defaultdict(list)
+        for group_key, group_field_keys in grouped.items():
+            call_params = [[]] * len(fields)
+            for i, field_name in enumerate(fields):
+                field = field_map[field_name]
+                call_params[i] = [field[key] for key in group_field_keys]
+
+            passed = predicate(*call_params)
+            if passed:
+                result[group_key] = group_field_keys
+
+        return result
+
     def find_keys(
         self,
         fields: Tuple[str],
-        predicate: VarargsPredicate,
+        predicate: VarargsAnyPredicate,
         mode: FindMode = FindMode.INNER_JOIN,
     ) -> Set[Hashable]:
         # NOTE:
@@ -102,5 +169,6 @@ __all__ = [
     "FindMode",
     "Field",
     "FieldRow",
-    "VarargsPredicate",
+    "VarargsAnyPredicate",
+    "VarargsListsPredicate",
 ]
